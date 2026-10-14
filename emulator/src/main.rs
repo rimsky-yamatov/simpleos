@@ -10,6 +10,8 @@ enum Statement {
     Input { var: String },
     Goto { target: usize },
     IfThen { cond: String, then: String },
+    For { var: String, start: String, end: String },
+    Next { var: String },
     End,
     Rem(String),
 }
@@ -170,6 +172,8 @@ fn print_help() {
     println!("  LOAD <basename>");
     println!("  DIR / TREE");
     println!("  NEW");
+    println!("  FOR I = 1 TO 3");
+    println!("  NEXT I");
     println!("  LET A = 10");
     println!("  PRINT A + 5");
     println!("  IF A > 5 THEN PRINT 42");
@@ -207,6 +211,8 @@ fn format_statement(stmt: &Statement) -> String {
         Statement::Input { var } => format!("INPUT {}", var),
         Statement::Goto { target } => format!("GOTO {}", target),
         Statement::IfThen { cond, then } => format!("IF {} THEN {}", cond, then),
+        Statement::For { var, start, end } => format!("FOR {} = {} TO {}", var, start, end),
+        Statement::Next { var } => format!("NEXT {}", var),
         Statement::End => "END".to_string(),
         Statement::Rem(msg) => format!("REM {}", msg),
     }
@@ -279,6 +285,20 @@ fn parse_program_line(line: &str) -> Option<(usize, Statement)> {
             let then_body = parts[1].trim();
             return Some((number, Statement::IfThen { cond: cond.to_string(), then: then_body.to_string() }));
         }
+    }
+    if upper.starts_with("FOR ") {
+        let rhs = &rest[4..];
+        let mut parts = rhs.splitn(2, "TO");
+        let left = parts.next()?.trim();
+        let right = parts.next()?.trim();
+        let mut decl = left.splitn(2, "=");
+        let var = decl.next()?.trim().to_uppercase();
+        let start = decl.next()?.trim();
+        return Some((number, Statement::For { var, start: start.to_string(), end: right.to_string() }));
+    }
+    if upper.starts_with("NEXT ") {
+        let var = rest[5..].trim().to_uppercase();
+        return Some((number, Statement::Next { var }));
     }
     if upper == "END" {
         return Some((number, Statement::End));
@@ -397,6 +417,35 @@ fn execute_program(program: &BTreeMap<usize, Statement>, vars: &mut HashMap<Stri
                     pc += 1;
                 }
             }
+            Statement::For { var, start, end } => {
+                let start_value = eval_expr(start, vars)?;
+                let end_value = eval_expr(end, vars)?;
+                vars.insert(var.clone(), start_value);
+                if start_value > end_value {
+                    let skip_to = find_matching_next(&lines, pc).unwrap_or(lines.len());
+                    pc = skip_to + 1;
+                } else {
+                    pc += 1;
+                }
+            }
+            Statement::Next { var } => {
+                let current = vars.get(var).copied().unwrap_or(0);
+                let next_value = current + 1;
+                vars.insert(var.clone(), next_value);
+
+                let loop_start = find_matching_for(&lines, pc).unwrap_or(pc);
+                let loop_stmt = &lines[loop_start].statement;
+                if let Statement::For { var: loop_var, end, .. } = loop_stmt {
+                    let end_value = eval_expr(end, vars)?;
+                    if next_value <= end_value && loop_var == var {
+                        pc = loop_start + 1;
+                    } else {
+                        pc += 1;
+                    }
+                } else {
+                    pc += 1;
+                }
+            }
             Statement::End => {
                 return Ok(());
             }
@@ -411,6 +460,40 @@ fn execute_program(program: &BTreeMap<usize, Statement>, vars: &mut HashMap<Stri
 
 fn find_program_index(lines: &[ProgramLine], target: usize) -> Option<usize> {
     lines.iter().position(|line| line.number == target)
+}
+
+fn find_matching_for(lines: &[ProgramLine], next_index: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for i in (0..=next_index).rev() {
+        match &lines[i].statement {
+            Statement::Next { .. } => depth += 1,
+            Statement::For { .. } => {
+                if depth == 0 {
+                    return Some(i);
+                }
+                depth -= 1;
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn find_matching_next(lines: &[ProgramLine], for_index: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for i in for_index..lines.len() {
+        match &lines[i].statement {
+            Statement::For { .. } => depth += 1,
+            Statement::Next { .. } => {
+                if depth == 1 {
+                    return Some(i);
+                }
+                depth -= 1;
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn eval_condition(cond: &str, vars: &HashMap<String, i64>) -> Result<bool, String> {
