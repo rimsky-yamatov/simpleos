@@ -15,6 +15,11 @@ pub enum Statement {
 
 pub type Program = BTreeMap<usize, Statement>;
 
+pub trait Console {
+    fn read_line(&mut self) -> Option<String>;
+    fn write_line(&mut self, s: &str);
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct BasicInterpreter {
     vars: HashMap<String, i64>,
@@ -43,7 +48,7 @@ impl BasicInterpreter {
         self.vars.clear();
     }
 
-    pub fn execute_program(&mut self, program: &Program) -> Result<(), String> {
+    pub fn execute_program(&mut self, program: &Program, console: &mut dyn Console) -> Result<(), String> {
         let lines: Vec<(usize, Statement)> = program.iter().map(|(n, stmt)| (*n, stmt.clone())).collect();
         let mut pc = 0usize;
 
@@ -56,12 +61,20 @@ impl BasicInterpreter {
                     pc += 1;
                 }
                 Statement::Print { expr } => {
-                    let _ = self.eval_expr(expr)?;
+                    let value = self.eval_expr(expr)?;
+                    console.write_line(&value.to_string());
                     pc += 1;
                 }
                 Statement::Input { var } => {
-                    let value = self.get_var(var).unwrap_or(0);
-                    self.set_var(var, value);
+                    if let Some(line) = console.read_line() {
+                        if let Ok(v) = line.trim().parse::<i64>() {
+                            self.set_var(var, v);
+                        } else {
+                            return Err("INPUT expects integer".to_string());
+                        }
+                    } else {
+                        return Err("INPUT read failed".to_string());
+                    }
                     pc += 1;
                 }
                 Statement::Goto { target } => {
@@ -76,6 +89,11 @@ impl BasicInterpreter {
                             let target = action[5..].trim().parse::<usize>().map_err(|_| format!("Invalid GOTO {}", action))?;
                             let idx = lines.iter().position(|(n, _)| *n == target).ok_or_else(|| format!("Undefined GOTO target {}", target))?;
                             pc = idx;
+                        } else if action.to_uppercase().starts_with("PRINT ") {
+                            let expr = &action[6..];
+                            let value = self.eval_expr(expr)?;
+                            console.write_line(&value.to_string());
+                            pc += 1;
                         } else if action.to_uppercase() == "END" {
                             return Ok(());
                         } else {
@@ -106,7 +124,36 @@ impl BasicInterpreter {
                     let current = self.get_var(var).unwrap_or(0);
                     let next_value = current + 1;
                     self.set_var(var, next_value);
-                    pc += 1;
+                    // find matching for
+                    let mut depth = 0usize;
+                    let mut found = None;
+                    for i in (0..=pc).rev() {
+                        match &lines[i].1 {
+                            Statement::Next { .. } => depth += 1,
+                            Statement::For { .. } => {
+                                if depth == 0 {
+                                    found = Some(i);
+                                    break;
+                                }
+                                depth -= 1;
+                            }
+                            _ => {}
+                        }
+                    }
+                    if let Some(for_idx) = found {
+                        if let Statement::For { var: loop_var, end, .. } = &lines[for_idx].1 {
+                            let end_value = self.eval_expr(end)?;
+                            if next_value <= end_value && loop_var == var {
+                                pc = for_idx + 1;
+                            } else {
+                                pc += 1;
+                            }
+                        } else {
+                            pc += 1;
+                        }
+                    } else {
+                        pc += 1;
+                    }
                 }
                 Statement::End => return Ok(()),
                 Statement::Rem(_) => pc += 1,
