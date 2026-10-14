@@ -1,47 +1,96 @@
-use std::collections::{BTreeMap, HashMap};
+use basic_core::{BasicInterpreter, Console, Program, Statement};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-#[derive(Clone, Debug)]
-enum Statement {
-    Let { var: String, expr: String },
-    Print { expr: String },
-    Input { var: String },
-    Goto { target: usize },
-    IfThen { cond: String, then: String },
-    For { var: String, start: String, end: String },
-    Next { var: String },
-    End,
-    Rem(String),
+#[derive(Default)]
+struct StdConsole;
+
+impl Console for StdConsole {
+    fn read_line(&mut self) -> Option<String> {
+        let mut input = String::new();
+        match io::stdin().read_line(&mut input) {
+            Ok(0) => None,
+            Ok(_) => Some(input.trim_end_matches(['\r', '\n']).to_string()),
+            Err(_) => None,
+        }
+    }
+
+    fn write_line(&mut self, s: &str) {
+        println!("{}", s);
+    }
 }
 
-#[derive(Clone, Debug)]
-struct ProgramLine {
-    number: usize,
-    statement: Statement,
+#[derive(Default)]
+struct HostStorage {
+    root: PathBuf,
+}
+
+impl HostStorage {
+    fn new(root: PathBuf) -> Self {
+        Self { root }
+    }
+
+    fn list_dir(&self) -> Vec<String> {
+        let mut entries = fs::read_dir(&self.root)
+            .map(|it| it.filter_map(Result::ok).collect::<Vec<_>>())
+            .unwrap_or_default();
+        entries.sort_by_key(|e| e.file_name());
+        entries
+            .into_iter()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect()
+    }
+
+    fn save_program(&self, name: &str, program: &Program) -> bool {
+        let file = self.root.join(format!("{}.bas", sanitize_name(name)));
+        let mut text = String::new();
+        for (num, stmt) in program.iter() {
+            text.push_str(&format!("{} {}\n", num, format_statement(stmt)));
+        }
+        fs::write(file, text).is_ok()
+    }
+
+    fn load_program(&self, name: &str) -> Result<Program, String> {
+        let file = self.root.join(format!("{}.bas", sanitize_name(name)));
+        let content = fs::read_to_string(file).map_err(|_| format!("file {} not found", name))?;
+        let mut program = BTreeMap::new();
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if let Some((num, stmt)) = parse_program_line(trimmed) {
+                program.insert(num, stmt);
+            }
+        }
+        Ok(program)
+    }
+}
+
+fn ensure_fs_dir() -> PathBuf {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("fs");
+    fs::create_dir_all(&dir).unwrap();
+    dir
 }
 
 fn main() {
     let fs_dir = ensure_fs_dir();
+    let mut storage = HostStorage::new(fs_dir.clone());
+    let mut console = StdConsole;
+    let mut interpreter = BasicInterpreter::new();
+    let mut program: Program = BTreeMap::new();
+
     println!("SimpleOS emulator v0.2");
     println!("BASIC shell ready. Type HELP, LIST, RUN, SAVE <name>, LOAD <name>, DIR, NEW or EXIT.");
     println!("Filesystem directory: {}", fs_dir.display());
-
-    let mut vars: HashMap<String, i64> = HashMap::new();
-    let mut program: BTreeMap<usize, Statement> = BTreeMap::new();
 
     loop {
         print!("BASIC> ");
         io::stdout().flush().unwrap();
 
-        let mut input = String::new();
-        match io::stdin().read_line(&mut input) {
-            Ok(0) => break,
-            Ok(_) => {}
-            Err(_) => break,
-        }
-
+        let Some(input) = console.read_line() else { break; };
         let line = input.trim();
         if line.is_empty() {
             continue;
@@ -55,7 +104,7 @@ fn main() {
 
         if upper == "NEW" {
             program.clear();
-            vars.clear();
+            interpreter.clear();
             println!("Program and variables cleared.");
             continue;
         }
@@ -66,17 +115,30 @@ fn main() {
         }
 
         if upper == "DIR" || upper == "TREE" {
-            list_directory(&fs_dir);
+            let entries = storage.list_dir();
+            if entries.is_empty() {
+                println!("<empty>");
+            } else {
+                for entry in entries {
+                    println!("{}", entry);
+                }
+            }
             continue;
         }
 
         if upper == "LIST" {
-            list_program(&program);
+            if program.is_empty() {
+                println!("<empty program>");
+            } else {
+                for (num, stmt) in &program {
+                    println!("{:>5}  {}", num, format_statement(stmt));
+                }
+            }
             continue;
         }
 
         if upper == "RUN" {
-            match execute_program(&program, &mut vars) {
+            match interpreter.execute_program(&program, &mut console) {
                 Ok(_) => {}
                 Err(e) => println!("ERROR: {}", e),
             }
@@ -84,7 +146,7 @@ fn main() {
         }
 
         if let Some(name) = line.strip_prefix("SAVE ") {
-            if save_program(&program, &fs_dir, name.trim()) {
+            if storage.save_program(name.trim(), &program) {
                 println!("Saved {}", name.trim());
             } else {
                 println!("FAILED: save {}", name.trim());
@@ -93,7 +155,7 @@ fn main() {
         }
 
         if let Some(name) = line.strip_prefix("LOAD ") {
-            match load_program(&fs_dir, name.trim()) {
+            match storage.load_program(name.trim()) {
                 Ok(p) => {
                     program = p;
                     println!("Loaded {}", name.trim());
@@ -104,16 +166,16 @@ fn main() {
         }
 
         if let Some(_) = split_leading_number(line) {
-            if let Some((number, statement)) = parse_program_line(line) {
-                program.insert(number, statement);
+            if let Some((number, stmt)) = parse_program_line(line) {
+                program.insert(number, stmt);
                 continue;
             }
         }
 
         if let Some((name, expr)) = parse_let(&line[4..]) {
-            match eval_expr(expr, &vars) {
+            match interpreter.eval_expr(expr) {
                 Ok(v) => {
-                    vars.insert(name.to_string(), v);
+                    interpreter.set_var(&name, v);
                     println!("{} = {}", name, v);
                 }
                 Err(e) => println!("ERROR: {}", e),
@@ -122,7 +184,7 @@ fn main() {
         }
 
         if let Some(expr) = line.strip_prefix("PRINT ") {
-            match eval_expr(expr, &vars) {
+            match interpreter.eval_expr(expr) {
                 Ok(v) => println!("{}", v),
                 Err(e) => println!("ERROR: {}", e),
             }
@@ -131,36 +193,28 @@ fn main() {
 
         if let Some(var) = line.strip_prefix("INPUT ") {
             let trimmed = var.trim();
-            let mut buf = String::new();
             print!("{}? ", trimmed);
             io::stdout().flush().unwrap();
-            match io::stdin().read_line(&mut buf) {
-                Ok(_) => {
-                    let value = match buf.trim().parse::<i64>() {
-                        Ok(v) => v,
-                        Err(_) => {
-                            println!("ERROR: INPUT expects integer");
-                            continue;
-                        }
-                    };
-                    vars.insert(trimmed.to_string(), value);
+            let Some(response) = console.read_line() else {
+                println!("\nERROR: INPUT read failed");
+                continue;
+            };
+            let value = match response.trim().parse::<i64>() {
+                Ok(v) => v,
+                Err(_) => {
+                    println!("ERROR: INPUT expects integer");
+                    continue;
                 }
-                Err(_) => println!("ERROR: INPUT read failed"),
-            }
+            };
+            interpreter.set_var(trimmed, value);
             continue;
         }
 
-        match eval_expr(line, &vars) {
+        match interpreter.eval_expr(line) {
             Ok(v) => println!("{}", v),
             Err(e) => println!("ERROR: {}", e),
         }
     }
-}
-
-fn ensure_fs_dir() -> PathBuf {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("fs");
-    fs::create_dir_all(&dir).unwrap();
-    dir
 }
 
 fn print_help() {
@@ -179,29 +233,6 @@ fn print_help() {
     println!("  IF A > 5 THEN PRINT 42");
     println!("  GOTO 20");
     println!("  EXIT");
-}
-
-fn list_directory(dir: &Path) {
-    let mut entries = fs::read_dir(dir).unwrap().collect::<Vec<_>>();
-    entries.sort_by_key(|e| e.as_ref().unwrap().file_name());
-    if entries.is_empty() {
-        println!("<empty>");
-        return;
-    }
-    for entry in entries {
-        let e = entry.unwrap();
-        println!("{}", e.file_name().to_string_lossy());
-    }
-}
-
-fn list_program(program: &BTreeMap<usize, Statement>) {
-    if program.is_empty() {
-        println!("<empty program>");
-        return;
-    }
-    for (num, stmt) in program.iter() {
-        println!("{:>5}  {}", num, format_statement(stmt));
-    }
 }
 
 fn format_statement(stmt: &Statement) -> String {
@@ -245,7 +276,6 @@ fn parse_program_line(line: &str) -> Option<(usize, Statement)> {
     if trimmed.is_empty() {
         return None;
     }
-
     let mut idx = 0usize;
     while idx < trimmed.len() && trimmed.as_bytes()[idx].is_ascii_digit() {
         idx += 1;
@@ -310,34 +340,6 @@ fn parse_program_line(line: &str) -> Option<(usize, Statement)> {
     None
 }
 
-fn save_program(program: &BTreeMap<usize, Statement>, dir: &Path, name: &str) -> bool {
-    let raw_name = sanitize_name(name);
-    let path = dir.join(format!("{}.bas", raw_name));
-    let mut text = String::new();
-    for (num, stmt) in program.iter() {
-        text.push_str(&format!("{} {}\n", num, format_statement(stmt)));
-    }
-    fs::write(path, text).is_ok()
-}
-
-fn load_program(dir: &Path, name: &str) -> Result<BTreeMap<usize, Statement>, String> {
-    let raw_name = sanitize_name(name);
-    let path = dir.join(format!("{}.bas", raw_name));
-    let content = fs::read_to_string(path).map_err(|_| format!("file {} not found", name))?;
-    let mut program = BTreeMap::new();
-
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if let Some((num, stmt)) = parse_program_line(trimmed) {
-            program.insert(num, stmt);
-        }
-    }
-    Ok(program)
-}
-
 fn sanitize_name(input: &str) -> String {
     let cleaned: String = input
         .chars()
@@ -348,352 +350,4 @@ fn sanitize_name(input: &str) -> String {
     } else {
         cleaned
     }
-}
-
-fn execute_program(program: &BTreeMap<usize, Statement>, vars: &mut HashMap<String, i64>) -> Result<(), String> {
-    let lines: Vec<ProgramLine> = program
-        .iter()
-        .map(|(n, stmt)| ProgramLine { number: *n, statement: stmt.clone() })
-        .collect();
-
-    let mut pc = 0usize;
-
-    while pc < lines.len() {
-        let line = &lines[pc];
-        match &line.statement {
-            Statement::Let { var, expr } => {
-                let value = eval_expr(expr, vars)?;
-                vars.insert(var.clone(), value);
-                pc += 1;
-            }
-            Statement::Print { expr } => {
-                let value = eval_expr(expr, vars)?;
-                println!("{}", value);
-                pc += 1;
-            }
-            Statement::Input { var } => {
-                let mut buf = String::new();
-                print!("{}? ", var);
-                io::stdout().flush().unwrap();
-                io::stdin().read_line(&mut buf).map_err(|_| "INPUT failed".to_string())?;
-                let value = buf.trim().parse::<i64>().map_err(|_| format!("INPUT requires integer for {}", var))?;
-                vars.insert(var.clone(), value);
-                pc += 1;
-            }
-            Statement::Goto { target } => {
-                let idx = find_program_index(&lines, *target);
-                pc = idx.ok_or_else(|| format!("Undefined GOTO target {}", target))?;
-            }
-            Statement::IfThen { cond, then } => {
-                let ok = eval_condition(cond, vars)?;
-                if ok {
-                    let action = then.trim();
-                    if action.to_uppercase().starts_with("GOTO ") {
-                        let target = action[5..].trim().parse::<usize>().map_err(|_| format!("Invalid GOTO {}", action))?;
-                        let idx = find_program_index(&lines, target).ok_or_else(|| format!("Undefined GOTO target {}", target))?;
-                        pc = idx;
-                    } else if action.to_uppercase().starts_with("LET ") {
-                        let mut parts = action.splitn(2, '=');
-                        let name = parts.next().unwrap_or("").trim().to_uppercase();
-                        let expr = parts.next().unwrap_or("").trim();
-                        if !name.is_empty() && !expr.is_empty() {
-                            let value = eval_expr(expr, vars)?;
-                            vars.insert(name, value);
-                            pc += 1;
-                        } else {
-                            pc += 1;
-                        }
-                    } else if action.to_uppercase().starts_with("PRINT ") {
-                        let expr = &action[6..];
-                        let value = eval_expr(expr, vars)?;
-                        println!("{}", value);
-                        pc += 1;
-                    } else if action.to_uppercase() == "END" {
-                        return Ok(());
-                    } else {
-                        pc += 1;
-                    }
-                } else {
-                    pc += 1;
-                }
-            }
-            Statement::For { var, start, end } => {
-                let start_value = eval_expr(start, vars)?;
-                let end_value = eval_expr(end, vars)?;
-                vars.insert(var.clone(), start_value);
-                if start_value > end_value {
-                    let skip_to = find_matching_next(&lines, pc).unwrap_or(lines.len());
-                    pc = skip_to + 1;
-                } else {
-                    pc += 1;
-                }
-            }
-            Statement::Next { var } => {
-                let current = vars.get(var).copied().unwrap_or(0);
-                let next_value = current + 1;
-                vars.insert(var.clone(), next_value);
-
-                let loop_start = find_matching_for(&lines, pc).unwrap_or(pc);
-                let loop_stmt = &lines[loop_start].statement;
-                if let Statement::For { var: loop_var, end, .. } = loop_stmt {
-                    let end_value = eval_expr(end, vars)?;
-                    if next_value <= end_value && loop_var == var {
-                        pc = loop_start + 1;
-                    } else {
-                        pc += 1;
-                    }
-                } else {
-                    pc += 1;
-                }
-            }
-            Statement::End => {
-                return Ok(());
-            }
-            Statement::Rem(_) => {
-                pc += 1;
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn find_program_index(lines: &[ProgramLine], target: usize) -> Option<usize> {
-    lines.iter().position(|line| line.number == target)
-}
-
-fn find_matching_for(lines: &[ProgramLine], next_index: usize) -> Option<usize> {
-    let mut depth = 0usize;
-    for i in (0..=next_index).rev() {
-        match &lines[i].statement {
-            Statement::Next { .. } => depth += 1,
-            Statement::For { .. } => {
-                if depth == 0 {
-                    return Some(i);
-                }
-                depth -= 1;
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-fn find_matching_next(lines: &[ProgramLine], for_index: usize) -> Option<usize> {
-    let mut depth = 0usize;
-    for i in for_index..lines.len() {
-        match &lines[i].statement {
-            Statement::For { .. } => depth += 1,
-            Statement::Next { .. } => {
-                if depth == 1 {
-                    return Some(i);
-                }
-                depth -= 1;
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-fn eval_condition(cond: &str, vars: &HashMap<String, i64>) -> Result<bool, String> {
-    for op in ["<=", ">=", "<>", "=", "<", ">"] {
-        if let Some(pos) = cond.find(op) {
-            let left = cond[..pos].trim();
-            let right = cond[pos + op.len()..].trim();
-            let a = eval_expr(left, vars)?;
-            let b = eval_expr(right, vars)?;
-            let result = match op {
-                "<=" => a <= b,
-                ">=" => a >= b,
-                "<>" => a != b,
-                "=" => a == b,
-                "<" => a < b,
-                ">" => a > b,
-                _ => false,
-            };
-            return Ok(result);
-        }
-    }
-    Ok(eval_expr(cond, vars)? != 0)
-}
-
-#[derive(Debug, Clone)]
-enum Token {
-    Num(i64),
-    Var(String),
-    Op(char),
-    LParen,
-    RParen,
-}
-
-fn eval_expr(expr: &str, vars: &HashMap<String, i64>) -> Result<i64, String> {
-    let tokens = tokenize(expr)?;
-    let postfix = shunting_yard(&tokens)?;
-    eval_rpn(&postfix, vars)
-}
-
-fn tokenize(s: &str) -> Result<Vec<Token>, String> {
-    let mut chars = s.chars().peekable();
-    let mut tokens = Vec::new();
-
-    while let Some(&ch) = chars.peek() {
-        if ch.is_whitespace() {
-            chars.next();
-            continue;
-        }
-
-        if ch.is_ascii_digit() {
-            let mut value = 0i64;
-            while let Some(&d) = chars.peek() {
-                if d.is_ascii_digit() {
-                    value = value * 10 + (d as i64 - '0' as i64);
-                    chars.next();
-                } else {
-                    break;
-                }
-            }
-            tokens.push(Token::Num(value));
-            continue;
-        }
-
-        if ch.is_ascii_alphabetic() || ch == '_' {
-            let mut ident = String::new();
-            while let Some(&c) = chars.peek() {
-                if c.is_ascii_alphanumeric() || c == '_' {
-                    ident.push(c.to_ascii_uppercase());
-                    chars.next();
-                } else {
-                    break;
-                }
-            }
-            tokens.push(Token::Var(ident));
-            continue;
-        }
-
-        match ch {
-            '+' | '-' | '*' | '/' => {
-                if ch == '-' {
-                    let previous = tokens.last();
-                    let unary = match previous {
-                        Some(Token::Num(_)) | Some(Token::Var(_)) | Some(Token::RParen) => false,
-                        _ => true,
-                    };
-                    if unary {
-                        tokens.push(Token::Op('u'));
-                    } else {
-                        tokens.push(Token::Op('-'));
-                    }
-                } else {
-                    tokens.push(Token::Op(ch));
-                }
-                chars.next();
-            }
-            '(' => {
-                tokens.push(Token::LParen);
-                chars.next();
-            }
-            ')' => {
-                tokens.push(Token::RParen);
-                chars.next();
-            }
-            _ => return Err(format!("Unknown character: '{}'", ch)),
-        }
-    }
-
-    Ok(tokens)
-}
-
-fn precedence(op: char) -> i32 {
-    match op {
-        'u' => 3,
-        '*' | '/' => 2,
-        '+' | '-' => 1,
-        _ => 0,
-    }
-}
-
-fn shunting_yard(tokens: &[Token]) -> Result<Vec<Token>, String> {
-    let mut output = Vec::new();
-    let mut operators = Vec::new();
-
-    for token in tokens {
-        match token {
-            Token::Num(_) | Token::Var(_) => output.push(token.clone()),
-            Token::LParen => operators.push('('),
-            Token::RParen => {
-                while let Some(top) = operators.pop() {
-                    if top == '(' {
-                        break;
-                    }
-                    output.push(Token::Op(top));
-                }
-                if operators.last() == Some(&'(') {
-                    operators.pop();
-                }
-            }
-            Token::Op(op) => {
-                loop {
-                    let top = operators.last().copied();
-                    if top.is_some() && top != Some('(') && precedence(top.unwrap()) >= precedence(*op) {
-                        output.push(Token::Op(operators.pop().unwrap()));
-                    } else {
-                        break;
-                    }
-                }
-                operators.push(*op);
-            }
-        }
-    }
-
-    while let Some(op) = operators.pop() {
-        if op == '(' {
-            return Err("Mismatched parenthesis".to_string());
-        }
-        output.push(Token::Op(op));
-    }
-
-    Ok(output)
-}
-
-fn eval_rpn(queue: &[Token], vars: &HashMap<String, i64>) -> Result<i64, String> {
-    let mut stack = Vec::new();
-    for token in queue {
-        match token {
-            Token::Num(value) => stack.push(*value),
-            Token::Var(name) => {
-                let value = vars.get(name).cloned().ok_or_else(|| format!("Undefined variable: {}", name))?;
-                stack.push(value);
-            }
-            Token::Op(op) => {
-                if *op == 'u' {
-                    let v = stack.pop().ok_or_else(|| "Unary minus missing operand".to_string())?;
-                    stack.push(-v);
-                    continue;
-                }
-                let right = stack.pop().ok_or_else(|| "Missing right operand".to_string())?;
-                let left = stack.pop().ok_or_else(|| "Missing left operand".to_string())?;
-                let value = match *op {
-                    '+' => left + right,
-                    '-' => left - right,
-                    '*' => left * right,
-                    '/' => {
-                        if right == 0 {
-                            return Err("Division by zero".to_string());
-                        }
-                        left / right
-                    }
-                    _ => return Err(format!("Unsupported operator: {}", op)),
-                };
-                stack.push(value);
-            }
-            _ => return Err("Malformed expression".to_string()),
-        }
-    }
-
-    if stack.len() != 1 {
-        return Err("Invalid expression".to_string());
-    }
-
-    Ok(stack[0])
 }
