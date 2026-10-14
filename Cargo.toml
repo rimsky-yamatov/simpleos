@@ -1,2 +1,2 @@
 [workspace]
-members = ["emulator", "kernel"]
+members = ["basic_core", "emulator", "kernel"]
