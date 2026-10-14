@@ -1,0 +1,5 @@
+# Ignore target files and editor config
+/target
+**/*.rs.bk
+**/*.swp
+Cargo.lock
