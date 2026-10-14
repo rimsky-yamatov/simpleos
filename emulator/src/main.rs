@@ -1,4 +1,7 @@
-use basic_core::{BasicInterpreter, Console, Program, Statement};
+use basic_core::{
+    parse_let, parse_program_line, sanitize_name, split_leading_number, format_statement,
+    BasicInterpreter, Console, Program, Statement,
+};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Write};
@@ -165,7 +168,7 @@ fn main() {
             continue;
         }
 
-        if let Some(_) = split_leading_number(line) {
+        if split_leading_number(line).is_some() {
             if let Some((number, stmt)) = parse_program_line(line) {
                 program.insert(number, stmt);
                 continue;
@@ -233,121 +236,4 @@ fn print_help() {
     println!("  IF A > 5 THEN PRINT 42");
     println!("  GOTO 20");
     println!("  EXIT");
-}
-
-fn format_statement(stmt: &Statement) -> String {
-    match stmt {
-        Statement::Let { var, expr } => format!("LET {} = {}", var, expr),
-        Statement::Print { expr } => format!("PRINT {}", expr),
-        Statement::Input { var } => format!("INPUT {}", var),
-        Statement::Goto { target } => format!("GOTO {}", target),
-        Statement::IfThen { cond, then } => format!("IF {} THEN {}", cond, then),
-        Statement::For { var, start, end } => format!("FOR {} = {} TO {}", var, start, end),
-        Statement::Next { var } => format!("NEXT {}", var),
-        Statement::End => "END".to_string(),
-        Statement::Rem(msg) => format!("REM {}", msg),
-    }
-}
-
-fn parse_let(s: &str) -> Option<(String, &str)> {
-    let parts: Vec<&str> = s.splitn(2, '=').collect();
-    if parts.len() != 2 {
-        return None;
-    }
-    let name = parts[0].trim();
-    let expr = parts[1].trim();
-    if name.is_empty() || expr.is_empty() {
-        return None;
-    }
-    Some((name.to_uppercase(), expr))
-}
-
-fn split_leading_number(input: &str) -> Option<&str> {
-    let trimmed = input.trim_start();
-    let chars: Vec<char> = trimmed.chars().take_while(|c| c.is_ascii_digit()).collect();
-    if chars.is_empty() {
-        return None;
-    }
-    Some(trimmed)
-}
-
-fn parse_program_line(line: &str) -> Option<(usize, Statement)> {
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let mut idx = 0usize;
-    while idx < trimmed.len() && trimmed.as_bytes()[idx].is_ascii_digit() {
-        idx += 1;
-    }
-    if idx == 0 {
-        return None;
-    }
-
-    let number = trimmed[..idx].parse::<usize>().ok()?;
-    let rest = trimmed[idx..].trim();
-    if rest.is_empty() {
-        return None;
-    }
-
-    let upper = rest.to_uppercase();
-    if upper.starts_with("LET ") {
-        let rhs = &rest[4..];
-        if let Some((name, expr)) = parse_let(rhs) {
-            return Some((number, Statement::Let { var: name, expr: expr.to_string() }));
-        }
-    }
-    if upper.starts_with("PRINT ") {
-        return Some((number, Statement::Print { expr: rest[6..].trim().to_string() }));
-    }
-    if upper.starts_with("INPUT ") {
-        return Some((number, Statement::Input { var: rest[6..].trim().to_string() }));
-    }
-    if upper.starts_with("GOTO ") {
-        let target = rest[5..].trim().parse::<usize>().ok()?;
-        return Some((number, Statement::Goto { target }));
-    }
-    if upper.starts_with("IF ") {
-        let cond_then = &rest[3..];
-        let parts: Vec<&str> = cond_then.splitn(2, "THEN").collect();
-        if parts.len() == 2 {
-            let cond = parts[0].trim();
-            let then_body = parts[1].trim();
-            return Some((number, Statement::IfThen { cond: cond.to_string(), then: then_body.to_string() }));
-        }
-    }
-    if upper.starts_with("FOR ") {
-        let rhs = &rest[4..];
-        let mut parts = rhs.splitn(2, "TO");
-        let left = parts.next()?.trim();
-        let right = parts.next()?.trim();
-        let mut decl = left.splitn(2, "=");
-        let var = decl.next()?.trim().to_uppercase();
-        let start = decl.next()?.trim();
-        return Some((number, Statement::For { var, start: start.to_string(), end: right.to_string() }));
-    }
-    if upper.starts_with("NEXT ") {
-        let var = rest[5..].trim().to_uppercase();
-        return Some((number, Statement::Next { var }));
-    }
-    if upper == "END" {
-        return Some((number, Statement::End));
-    }
-    if upper.starts_with("REM ") {
-        return Some((number, Statement::Rem(rest[4..].trim().to_string())));
-    }
-
-    None
-}
-
-fn sanitize_name(input: &str) -> String {
-    let cleaned: String = input
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-' || *c == '.')
-        .collect();
-    if cleaned.is_empty() {
-        "program".to_string()
-    } else {
-        cleaned
-    }
 }
