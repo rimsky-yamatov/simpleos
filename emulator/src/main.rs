@@ -23,7 +23,7 @@ struct ProgramLine {
 fn main() {
     let fs_dir = ensure_fs_dir();
     println!("SimpleOS emulator v0.2");
-    println!("BASIC shell ready. Type HELP, LIST, RUN, SAVE <name>, LOAD <name>, DIR or EXIT.");
+    println!("BASIC shell ready. Type HELP, LIST, RUN, SAVE <name>, LOAD <name>, DIR, NEW or EXIT.");
     println!("Filesystem directory: {}", fs_dir.display());
 
     let mut vars: HashMap<String, i64> = HashMap::new();
@@ -51,12 +51,19 @@ fn main() {
             break;
         }
 
+        if upper == "NEW" {
+            program.clear();
+            vars.clear();
+            println!("Program and variables cleared.");
+            continue;
+        }
+
         if upper == "HELP" {
             print_help();
             continue;
         }
 
-        if upper == "DIR" {
+        if upper == "DIR" || upper == "TREE" {
             list_directory(&fs_dir);
             continue;
         }
@@ -161,7 +168,8 @@ fn print_help() {
     println!("  LIST");
     println!("  SAVE <basename>");
     println!("  LOAD <basename>");
-    println!("  DIR");
+    println!("  DIR / TREE");
+    println!("  NEW");
     println!("  LET A = 10");
     println!("  PRINT A + 5");
     println!("  IF A > 5 THEN PRINT 42");
