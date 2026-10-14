@@ -124,7 +124,7 @@ impl BasicInterpreter {
                     let current = self.get_var(var).unwrap_or(0);
                     let next_value = current + 1;
                     self.set_var(var, next_value);
-                    // find matching for
+
                     let mut depth = 0usize;
                     let mut found = None;
                     for i in (0..=pc).rev() {
@@ -140,6 +140,7 @@ impl BasicInterpreter {
                             _ => {}
                         }
                     }
+
                     if let Some(for_idx) = found {
                         if let Statement::For { var: loop_var, end, .. } = &lines[for_idx].1 {
                             let end_value = self.eval_expr(end)?;
@@ -183,6 +184,124 @@ impl BasicInterpreter {
             }
         }
         Ok(self.eval_expr(cond)? != 0)
+    }
+}
+
+pub fn format_statement(stmt: &Statement) -> String {
+    match stmt {
+        Statement::Let { var, expr } => format!("LET {} = {}", var, expr),
+        Statement::Print { expr } => format!("PRINT {}", expr),
+        Statement::Input { var } => format!("INPUT {}", var),
+        Statement::Goto { target } => format!("GOTO {}", target),
+        Statement::IfThen { cond, then } => format!("IF {} THEN {}", cond, then),
+        Statement::For { var, start, end } => format!("FOR {} = {} TO {}", var, start, end),
+        Statement::Next { var } => format!("NEXT {}", var),
+        Statement::End => "END".to_string(),
+        Statement::Rem(msg) => format!("REM {}", msg),
+    }
+}
+
+pub fn parse_let(s: &str) -> Option<(String, &str)> {
+    let parts: Vec<&str> = s.splitn(2, '=').collect();
+    if parts.len() != 2 {
+        return None;
+    }
+    let name = parts[0].trim();
+    let expr = parts[1].trim();
+    if name.is_empty() || expr.is_empty() {
+        return None;
+    }
+    Some((name.to_uppercase(), expr))
+}
+
+pub fn split_leading_number(input: &str) -> Option<&str> {
+    let trimmed = input.trim_start();
+    let chars: Vec<char> = trimmed.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if chars.is_empty() {
+        return None;
+    }
+    Some(trimmed)
+}
+
+pub fn parse_program_line(line: &str) -> Option<(usize, Statement)> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let mut idx = 0usize;
+    while idx < trimmed.len() && trimmed.as_bytes()[idx].is_ascii_digit() {
+        idx += 1;
+    }
+    if idx == 0 {
+        return None;
+    }
+
+    let number = trimmed[..idx].parse::<usize>().ok()?;
+    let rest = trimmed[idx..].trim();
+    if rest.is_empty() {
+        return None;
+    }
+
+    let upper = rest.to_uppercase();
+    if upper.starts_with("LET ") {
+        let rhs = &rest[4..];
+        if let Some((name, expr)) = parse_let(rhs) {
+            return Some((number, Statement::Let { var: name, expr: expr.to_string() }));
+        }
+    }
+    if upper.starts_with("PRINT ") {
+        return Some((number, Statement::Print { expr: rest[6..].trim().to_string() }));
+    }
+    if upper.starts_with("INPUT ") {
+        return Some((number, Statement::Input { var: rest[6..].trim().to_string() }));
+    }
+    if upper.starts_with("GOTO ") {
+        let target = rest[5..].trim().parse::<usize>().ok()?;
+        return Some((number, Statement::Goto { target }));
+    }
+    if upper.starts_with("IF ") {
+        let cond_then = &rest[3..];
+        let parts: Vec<&str> = cond_then.splitn(2, "THEN").collect();
+        if parts.len() == 2 {
+            let cond = parts[0].trim();
+            let then_body = parts[1].trim();
+            return Some((number, Statement::IfThen { cond: cond.to_string(), then: then_body.to_string() }));
+        }
+    }
+    if upper.starts_with("FOR ") {
+        let rhs = &rest[4..];
+        let mut parts = rhs.splitn(2, "TO");
+        let left = parts.next()?.trim();
+        let right = parts.next()?.trim();
+        let mut decl = left.splitn(2, "=");
+        let var = decl.next()?.trim().to_uppercase();
+        let start = decl.next()?.trim();
+        return Some((number, Statement::For { var, start: start.to_string(), end: right.to_string() }));
+    }
+    if upper.starts_with("NEXT ") {
+        let var = rest[5..].trim().to_uppercase();
+        return Some((number, Statement::Next { var }));
+    }
+    if upper == "END" {
+        return Some((number, Statement::End));
+    }
+    if upper.starts_with("REM ") {
+        return Some((number, Statement::Rem(rest[4..].trim().to_string())));
+    }
+
+    None
+}
+
+pub fn sanitize_name(input: &str) -> String {
+    let cleaned: String = input
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-' || *c == '.')
+        .collect();
+    if cleaned.is_empty() {
+        "program".to_string()
+    } else {
+        cleaned
     }
 }
 
@@ -325,7 +444,9 @@ fn eval_rpn(tokens: &[Token], vars: &HashMap<String, i64>) -> Result<i64, String
                     '-' => left - right,
                     '*' => left * right,
                     '/' => {
-                        if right == 0 { return Err("Division by zero".to_string()); }
+                        if right == 0 {
+                            return Err("Division by zero".to_string());
+                        }
                         left / right
                     }
                     _ => return Err(format!("Unsupported operator: {}", op)),
@@ -341,4 +462,29 @@ fn eval_rpn(tokens: &[Token], vars: &HashMap<String, i64>) -> Result<i64, String
     }
 
     Ok(stack[0])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_basic_line() {
+        let stmt = parse_program_line("10 PRINT A + 1").unwrap();
+        assert_eq!(stmt.0, 10);
+        assert!(matches!(stmt.1, Statement::Print { .. }));
+    }
+
+    #[test]
+    fn evaluate_expression() {
+        let mut interp = BasicInterpreter::new();
+        interp.set_var("A", 5);
+        assert_eq!(interp.eval_expr("A + 2").unwrap(), 7);
+    }
+
+    #[test]
+    fn parse_if_then() {
+        let stmt = parse_program_line("20 IF A > 3 THEN PRINT 42").unwrap();
+        assert!(matches!(stmt.1, Statement::IfThen { .. }));
+    }
 }
