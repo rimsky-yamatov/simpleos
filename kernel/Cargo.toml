@@ -8,3 +8,9 @@ basic_core = { path = "../basic_core" }
 
 [lib]
 crate-type = ["lib"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
