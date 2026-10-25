@@ -28,9 +28,11 @@ jobs:
         run: cargo build -p basic_core -p simpleos-emulator --verbose
 
       - name: Build kernel image
+        env:
+          RUSTFLAGS: "-C link-arg=-T${{ github.workspace }}/kernel/linker.ld -C link-arg=-n -C link-arg=--gc-sections"
         run: |
           cargo build --manifest-path kernel/Cargo.toml --target x86_64-unknown-none --bin kernel --verbose
-          ld -n --gc-sections -T kernel/linker.ld -o kernel.bin target/x86_64-unknown-none/debug/kernel
+          cp target/x86_64-unknown-none/debug/kernel kernel.bin
 
       - name: Build ISO
         run: bash scripts/build_iso.sh
