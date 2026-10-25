@@ -1,2 +1,9 @@
 [workspace]
+resolver = "2"
 members = ["basic_core", "emulator", "kernel"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
