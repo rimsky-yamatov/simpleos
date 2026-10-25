@@ -6,6 +6,10 @@ edition = "2021"
 [dependencies]
 basic_core = { path = "../basic_core" }
 
+[[bin]]
+name = "kernel"
+path = "src/main.rs"
+
 [lib]
 crate-type = ["lib"]
 
