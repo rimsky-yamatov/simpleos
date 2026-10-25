@@ -1,4 +1,12 @@
-use std::collections::{BTreeMap, HashMap};
+#![cfg_attr(not(test), no_std)]
+
+extern crate alloc;
+
+use alloc::{
+    collections::BTreeMap,
+    string::{String, ToString},
+    vec::Vec,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Statement {
@@ -22,7 +30,7 @@ pub trait Console {
 
 #[derive(Clone, Debug, Default)]
 pub struct BasicInterpreter {
-    vars: HashMap<String, i64>,
+    vars: BTreeMap<String, i64>,
 }
 
 impl BasicInterpreter {
@@ -78,7 +86,8 @@ impl BasicInterpreter {
                     pc += 1;
                 }
                 Statement::Goto { target } => {
-                    let idx = lines.iter().position(|(n, _)| *n == *target).ok_or_else(|| format!("Undefined GOTO target {}", target))?;
+                    let idx = lines.iter().position(|(n, _)| *n == *target)
+                        .ok_or_else(|| format!("Undefined GOTO target {}", target))?;
                     pc = idx;
                 }
                 Statement::IfThen { cond, then } => {
@@ -86,8 +95,10 @@ impl BasicInterpreter {
                     if condition {
                         let action = then.trim();
                         if action.to_uppercase().starts_with("GOTO ") {
-                            let target = action[5..].trim().parse::<usize>().map_err(|_| format!("Invalid GOTO {}", action))?;
-                            let idx = lines.iter().position(|(n, _)| *n == target).ok_or_else(|| format!("Undefined GOTO target {}", target))?;
+                            let target = action[5..].trim().parse::<usize>()
+                                .map_err(|_| format!("Invalid GOTO {}", action))?;
+                            let idx = lines.iter().position(|(n, _)| *n == target)
+                                .ok_or_else(|| format!("Undefined GOTO target {}", target))?;
                             pc = idx;
                         } else if action.to_uppercase().starts_with("PRINT ") {
                             let expr = &action[6..];
@@ -421,7 +432,7 @@ fn shunting_yard(tokens: &[Token]) -> Result<Vec<Token>, String> {
     Ok(output)
 }
 
-fn eval_rpn(tokens: &[Token], vars: &HashMap<String, i64>) -> Result<i64, String> {
+fn eval_rpn(tokens: &[Token], vars: &BTreeMap<String, i64>) -> Result<i64, String> {
     let mut stack = Vec::new();
     for token in tokens {
         match token {
@@ -487,4 +498,4 @@ mod tests {
         let stmt = parse_program_line("20 IF A > 3 THEN PRINT 42").unwrap();
         assert!(matches!(stmt.1, Statement::IfThen { .. }));
     }
-}
+                    }
