@@ -1,6 +1,12 @@
 use basic_core::{BasicInterpreter, Console, Program, Statement};
 use std::collections::BTreeMap;
 
+mod boot;
+mod fs;
+
+pub use boot::{boot_kernel, BootConfig, BootImage};
+pub use fs::{HostStorage, Storage};
+
 pub struct Kernel {
     interpreter: BasicInterpreter,
     program: Program,
