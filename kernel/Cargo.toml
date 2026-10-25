@@ -1,8 +1,10 @@
 [package]
-name = "simpleos-kernel"
+name = "kernel"
 version = "0.1.0"
 edition = "2021"
 
+[dependencies]
+basic_core = { path = "../basic_core" }
+
 [lib]
-name = "simpleos_kernel"
-path = "src/lib.rs"
+crate-type = ["lib"]
