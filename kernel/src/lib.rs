@@ -1,5 +1,10 @@
+#![cfg_attr(not(test), no_std)]
+
+extern crate alloc;
+
+use alloc::{boxed::Box, collections::BTreeMap};
+
 use basic_core::{BasicInterpreter, Console, Program, Statement};
-use std::collections::BTreeMap;
 
 mod boot;
 mod fs;
@@ -34,7 +39,7 @@ impl Kernel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
+    use alloc::collections::BTreeMap;
 
     struct TestConsole;
 
