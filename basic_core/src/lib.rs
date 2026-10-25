@@ -1,7 +1,7 @@
 #![cfg_attr(not(test), no_std)]
 
 extern crate alloc;
-
+use alloc::format;
 use alloc::{
     collections::BTreeMap,
     string::{String, ToString},
