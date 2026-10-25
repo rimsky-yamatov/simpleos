@@ -498,4 +498,4 @@ mod tests {
         let stmt = parse_program_line("20 IF A > 3 THEN PRINT 42").unwrap();
         assert!(matches!(stmt.1, Statement::IfThen { .. }));
     }
-                    }
+}
