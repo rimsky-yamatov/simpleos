@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
 members = ["basic_core", "emulator", "kernel"]
+# kernel は no_std/no_main のため、ホストの `cargo build` / `cargo test` 対象から外す
+default-members = ["basic_core", "emulator"]
 
 [profile.dev]
 panic = "abort"
