@@ -1,6 +1,6 @@
 use basic_core::{
     parse_let, parse_program_line, sanitize_name, split_leading_number, format_statement,
-    BasicInterpreter, Console, Program, Statement,
+    BasicInterpreter, Console, Program,
 };
 use std::collections::BTreeMap;
 use std::fs;
@@ -80,7 +80,7 @@ fn ensure_fs_dir() -> PathBuf {
 
 fn main() {
     let fs_dir = ensure_fs_dir();
-    let mut storage = HostStorage::new(fs_dir.clone());
+    let storage = HostStorage::new(fs_dir.clone());
     let mut console = StdConsole;
     let mut interpreter = BasicInterpreter::new();
     let mut program: Program = BTreeMap::new();
