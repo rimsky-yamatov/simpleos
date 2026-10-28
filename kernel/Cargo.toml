@@ -10,3 +10,5 @@ basic_core = { path = "../basic_core" }
 [[bin]]
 name = "kernel"
 path = "src/main.rs"
+test = false
+bench = false
