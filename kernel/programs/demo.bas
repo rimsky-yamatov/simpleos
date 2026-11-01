@@ -1,0 +1,9 @@
+10 REM SimpleOS demo program
+20 LET A = 10
+30 PRINT "A = "; A
+40 PRINT "A * 3 = "; A * 3
+50 IF A > 5 THEN PRINT "OK"
+60 FOR I = 1 TO 3
+70 PRINT "LOOP "; I
+80 NEXT I
+90 END

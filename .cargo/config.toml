@@ -1,0 +1,4 @@
+# ベアメタル (x86_64-unknown-none) 向けの設定。ホストのビルドには影響しない。
+# 既定だと PIE になり、1MiB 固定アドレスに置くカーネルとは相性が悪いので静的リンクにする。
+[target.x86_64-unknown-none]
+rustflags = ["-C", "relocation-model=static", "-C", "relro-level=off"]

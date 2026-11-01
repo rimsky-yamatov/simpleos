@@ -1,0 +1,9 @@
+10 REM Prime numbers up to 100
+20 FOR N = 2 TO 100
+30 LET P = 1
+40 FOR D = 2 TO N - 1
+50 IF N % D = 0 THEN LET P = 0
+60 NEXT D
+70 IF P = 1 THEN PRINT N
+80 NEXT N
+90 END

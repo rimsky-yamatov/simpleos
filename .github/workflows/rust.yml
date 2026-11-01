@@ -28,18 +28,23 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y grub-pc-bin xorriso mtools
 
-      - name: Build host workspace
-        run: cargo build --target x86_64-unknown-linux-gnu -p basic_core -p simpleos-emulator --verbose
-
-      - name: Build kernel image
-        env:
-          RUSTFLAGS: "-C link-arg=-T${{ github.workspace }}/kernel/linker.ld -C link-arg=-n -C link-arg=--gc-sections"
+      - name: Build and test host workspace
         run: |
-          cargo build --manifest-path kernel/Cargo.toml --target x86_64-unknown-none --bin kernel --verbose
-          cp target/x86_64-unknown-none/debug/kernel kernel.bin
+          cargo build -p basic_core -p simpleos-emulator --verbose
+          cargo test -p basic_core --verbose
 
-      - name: Build ISO
+      - name: Build kernel and ISO
         run: bash scripts/build_iso.sh
+
+      # QEMU でブートして、シリアル経由で BASIC を実行できるか確認する
+      - name: Boot test (QEMU)
+        continue-on-error: true
+        run: |
+          sudo apt-get install -y qemu-system-x86
+          (sleep 5; printf 'RUN DEMO\r'; sleep 3; printf 'EXIT\r'; sleep 2) \
+            | timeout 60 qemu-system-x86_64 -m 128M -cdrom simpleos.iso -display none -serial stdio -no-reboot > boot.log || true
+          cat boot.log
+          grep -q "LOOP 3" boot.log
 
       - name: Upload ISO as workflow artifact
         uses: actions/upload-artifact@v4

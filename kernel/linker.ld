@@ -4,14 +4,25 @@ SECTIONS
 {
   . = 1M;
 
-  .text : {
-    *(.multiboot)
-    *(.text*)
+  /* Multiboot ヘッダはファイル先頭 8KiB 以内に置く必要がある */
+  .text : ALIGN(16) {
+    KEEP(*(.multiboot))
+    *(.boot.text)
+    *(.text .text.*)
   }
 
-  .rodata : { *(.rodata*) }
-  .data : { *(.data*) }
-  .bss : { *(.bss*) *(COMMON) }
+  .rodata : ALIGN(16) {
+    *(.boot.rodata)
+    *(.rodata .rodata.*)
+  }
 
-  /DISCARD/ : { *(.comment) *(.eh_frame) *(.note.gnu.build-id) }
+  .data : ALIGN(16) { *(.data .data.*) }
+
+  .bss : ALIGN(4096) {
+    *(.bss.boot)
+    *(.bss .bss.*)
+    *(COMMON)
+  }
+
+  /DISCARD/ : { *(.comment) *(.eh_frame) *(.eh_frame_hdr) *(.note.gnu.build-id) }
 }

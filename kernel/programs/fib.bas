@@ -1,0 +1,10 @@
+10 REM Fibonacci numbers
+20 LET A = 0
+30 LET B = 1
+40 FOR I = 1 TO 20
+50 PRINT A
+60 LET T = A + B
+70 LET A = B
+80 LET B = T
+90 NEXT I
+100 END

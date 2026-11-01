@@ -1,13 +1,15 @@
-use basic_core::{
-    parse_let, parse_program_line, sanitize_name, split_leading_number, format_statement,
-    BasicInterpreter, Console, Program,
-};
-use std::collections::BTreeMap;
+//! SimpleOS エミュレータ(ホスト上で動く BASIC シェル)。
+//! カーネルと同じ `basic_core::Shell` を使うので、動作確認用に使える。
+//!
+//! 使い方:
+//!   cargo run --release -p simpleos-emulator              # 対話シェル
+//!   cargo run --release -p simpleos-emulator -- foo.bas   # プログラムを実行して終了
+
+use basic_core::{Console, Shell, ShellAction, Storage};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-#[derive(Default)]
 struct StdConsole;
 
 impl Console for StdConsole {
@@ -23,217 +25,96 @@ impl Console for StdConsole {
     fn write_line(&mut self, s: &str) {
         println!("{}", s);
     }
+
+    fn write_prompt(&mut self, s: &str) {
+        print!("{}", s);
+        let _ = io::stdout().flush();
+    }
+
+    fn clear_screen(&mut self) {
+        // ANSI: 画面消去 + カーソルをホームへ
+        print!("\x1b[2J\x1b[H");
+        let _ = io::stdout().flush();
+    }
 }
 
-#[derive(Default)]
 struct HostStorage {
     root: PathBuf,
 }
 
 impl HostStorage {
     fn new(root: PathBuf) -> Self {
+        let _ = fs::create_dir_all(&root);
         Self { root }
     }
 
-    fn list_dir(&self) -> Vec<String> {
-        let mut entries = fs::read_dir(&self.root)
-            .map(|it| it.filter_map(Result::ok).collect::<Vec<_>>())
-            .unwrap_or_default();
-        entries.sort_by_key(|e| e.file_name());
-        entries
-            .into_iter()
-            .map(|e| e.file_name().to_string_lossy().to_string())
-            .collect()
-    }
-
-    fn save_program(&self, name: &str, program: &Program) -> bool {
-        let file = self.root.join(format!("{}.bas", sanitize_name(name)));
-        let mut text = String::new();
-        for (num, stmt) in program.iter() {
-            text.push_str(&format!("{} {}\n", num, format_statement(stmt)));
-        }
-        fs::write(file, text).is_ok()
-    }
-
-    fn load_program(&self, name: &str) -> Result<Program, String> {
-        let file = self.root.join(format!("{}.bas", sanitize_name(name)));
-        let content = fs::read_to_string(file).map_err(|_| format!("file {} not found", name))?;
-        let mut program = BTreeMap::new();
-        for line in content.lines() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            if let Some((num, stmt)) = parse_program_line(trimmed) {
-                program.insert(num, stmt);
-            }
-        }
-        Ok(program)
+    fn path(&self, name: &str) -> PathBuf {
+        self.root.join(format!("{}.bas", name))
     }
 }
 
-fn ensure_fs_dir() -> PathBuf {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("fs");
-    fs::create_dir_all(&dir).unwrap();
-    dir
+impl Storage for HostStorage {
+    fn list(&self) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(&self.root)
+            .map(|it| {
+                it.filter_map(Result::ok)
+                    .map(|e| e.path())
+                    .filter(|p| p.extension().map_or(false, |x| x == "bas"))
+                    .filter_map(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        names.sort();
+        names
+    }
+
+    fn save(&mut self, name: &str, text: &str) -> Result<(), String> {
+        fs::write(self.path(name), text).map_err(|e| format!("cannot save {}: {}", name, e))
+    }
+
+    fn load(&self, name: &str) -> Result<String, String> {
+        fs::read_to_string(self.path(name)).map_err(|_| format!("file {} not found", name))
+    }
+
+    fn delete(&mut self, name: &str) -> Result<(), String> {
+        fs::remove_file(self.path(name)).map_err(|_| format!("file {} not found", name))
+    }
 }
 
 fn main() {
-    let fs_dir = ensure_fs_dir();
-    let storage = HostStorage::new(fs_dir.clone());
+    let fs_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("fs");
+    let mut storage = HostStorage::new(fs_dir.clone());
     let mut console = StdConsole;
-    let mut interpreter = BasicInterpreter::new();
-    let mut program: Program = BTreeMap::new();
+    let mut shell = Shell::new();
 
-    println!("SimpleOS emulator v0.2");
-    println!("BASIC shell ready. Type HELP, LIST, RUN, SAVE <name>, LOAD <name>, DIR, NEW or EXIT.");
+    // 引数でファイルが渡されたら、それを実行して終了する
+    if let Some(path) = std::env::args().nth(1) {
+        match fs::read_to_string(&path) {
+            Ok(text) => {
+                shell.load_text(&text);
+                shell.handle_line("RUN", &mut console, &mut storage);
+            }
+            Err(e) => {
+                eprintln!("cannot read {}: {}", path, e);
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
+    shell.banner(&mut console);
     println!("Filesystem directory: {}", fs_dir.display());
 
     loop {
-        print!("BASIC> ");
-        io::stdout().flush().unwrap();
+        print!("> ");
+        let _ = io::stdout().flush();
 
-        let Some(input) = console.read_line() else { break; };
-        let line = input.trim();
-        if line.is_empty() {
-            continue;
-        }
-
-        let upper = line.to_uppercase();
-        if upper == "EXIT" || upper == "QUIT" {
+        let Some(line) = console.read_line() else {
+            break;
+        };
+        if shell.handle_line(&line, &mut console, &mut storage) == ShellAction::Exit {
             println!("Goodbye.");
             break;
         }
-
-        if upper == "NEW" {
-            program.clear();
-            interpreter.clear();
-            println!("Program and variables cleared.");
-            continue;
-        }
-
-        if upper == "HELP" {
-            print_help();
-            continue;
-        }
-
-        if upper == "DIR" || upper == "TREE" {
-            let entries = storage.list_dir();
-            if entries.is_empty() {
-                println!("<empty>");
-            } else {
-                for entry in entries {
-                    println!("{}", entry);
-                }
-            }
-            continue;
-        }
-
-        if upper == "LIST" {
-            if program.is_empty() {
-                println!("<empty program>");
-            } else {
-                for (num, stmt) in &program {
-                    println!("{:>5}  {}", num, format_statement(stmt));
-                }
-            }
-            continue;
-        }
-
-        if upper == "RUN" {
-            match interpreter.execute_program(&program, &mut console) {
-                Ok(_) => {}
-                Err(e) => println!("ERROR: {}", e),
-            }
-            continue;
-        }
-
-        if let Some(name) = line.strip_prefix("SAVE ") {
-            if storage.save_program(name.trim(), &program) {
-                println!("Saved {}", name.trim());
-            } else {
-                println!("FAILED: save {}", name.trim());
-            }
-            continue;
-        }
-
-        if let Some(name) = line.strip_prefix("LOAD ") {
-            match storage.load_program(name.trim()) {
-                Ok(p) => {
-                    program = p;
-                    println!("Loaded {}", name.trim());
-                }
-                Err(e) => println!("ERROR: {}", e),
-            }
-            continue;
-        }
-
-        if split_leading_number(line).is_some() {
-            if let Some((number, stmt)) = parse_program_line(line) {
-                program.insert(number, stmt);
-                continue;
-            }
-        }
-
-        if let Some((name, expr)) = parse_let(&line[4..]) {
-            match interpreter.eval_expr(expr) {
-                Ok(v) => {
-                    interpreter.set_var(&name, v);
-                    println!("{} = {}", name, v);
-                }
-                Err(e) => println!("ERROR: {}", e),
-            }
-            continue;
-        }
-
-        if let Some(expr) = line.strip_prefix("PRINT ") {
-            match interpreter.eval_expr(expr) {
-                Ok(v) => println!("{}", v),
-                Err(e) => println!("ERROR: {}", e),
-            }
-            continue;
-        }
-
-        if let Some(var) = line.strip_prefix("INPUT ") {
-            let trimmed = var.trim();
-            print!("{}? ", trimmed);
-            io::stdout().flush().unwrap();
-            let Some(response) = console.read_line() else {
-                println!("\nERROR: INPUT read failed");
-                continue;
-            };
-            let value = match response.trim().parse::<i64>() {
-                Ok(v) => v,
-                Err(_) => {
-                    println!("ERROR: INPUT expects integer");
-                    continue;
-                }
-            };
-            interpreter.set_var(trimmed, value);
-            continue;
-        }
-
-        match interpreter.eval_expr(line) {
-            Ok(v) => println!("{}", v),
-            Err(e) => println!("ERROR: {}", e),
-        }
     }
-}
-
-fn print_help() {
-    println!("Commands:");
-    println!("  10 PRINT 1 + 2");
-    println!("  RUN");
-    println!("  LIST");
-    println!("  SAVE <basename>");
-    println!("  LOAD <basename>");
-    println!("  DIR / TREE");
-    println!("  NEW");
-    println!("  FOR I = 1 TO 3");
-    println!("  NEXT I");
-    println!("  LET A = 10");
-    println!("  PRINT A + 5");
-    println!("  IF A > 5 THEN PRINT 42");
-    println!("  GOTO 20");
-    println!("  EXIT");
 }

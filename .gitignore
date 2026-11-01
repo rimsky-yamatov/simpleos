@@ -3,3 +3,8 @@
 **/*.rs.bk
 **/*.swp
 Cargo.lock
+
+# build outputs
+/iso
+/kernel.bin
+/simpleos.iso
