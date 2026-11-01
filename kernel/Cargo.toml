@@ -3,6 +3,8 @@ name = "kernel"
 version = "0.3.0"
 edition = "2021"
 build = "build.rs"
+# 古い src/lib.rs が残っていても lib としてビルドしない
+autolib = false
 
 [dependencies]
 basic_core = { path = "../basic_core" }
